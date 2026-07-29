@@ -1,0 +1,79 @@
+name: Deploy Claude API Proxy (Cloud Run)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: t8studio-infra-jp
+  REGION: asia-northeast1
+  SERVICE_NAME: claude-proxy
+  REPOSITORY: claude-proxy
+  IMAGE_NAME: claude-proxy
+  RUNTIME_SA: 970630623430-compute@developer.gserviceaccount.com
+  # Workload Identity Federation（SAキー不要・組織ポリシー準拠）
+  WORKLOAD_IDENTITY_PROVIDER: projects/970630623430/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  DEPLOY_SA: github-actions-deploy@t8studio-infra-jp.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SA }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Ensure Artifact Registry repository exists
+        run: |
+          gcloud artifacts repositories describe "$REPOSITORY" \
+            --project="$PROJECT_ID" \
+            --location="$REGION" \
+          || gcloud artifacts repositories create "$REPOSITORY" \
+            --project="$PROJECT_ID" \
+            --location="$REGION" \
+            --repository-format=docker \
+            --description="Claude API proxy images"
+
+      - name: Build Docker image
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
+          docker build -t "${IMAGE}:${GITHUB_SHA}" -t "${IMAGE}:latest" .
+
+      - name: Push Docker image
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}"
+          docker push "${IMAGE}:${GITHUB_SHA}"
+          docker push "${IMAGE}:latest"
+
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}"
+          gcloud run deploy "$SERVICE_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --image="$IMAGE" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --port=8080 \
+            --memory=256Mi \
+            --cpu=1 \
+            --timeout=60 \
+            --max-instances=5 \
+            --service-account="$RUNTIME_SA" \
+            --set-env-vars="GCP_PROJECT=${PROJECT_ID},CLAUDE_SECRET_NAME=claude-api-key"
