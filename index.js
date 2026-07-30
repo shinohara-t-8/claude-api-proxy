@@ -4,34 +4,66 @@ const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const secretClient = new SecretManagerServiceClient();
 const PORT = Number(process.env.PORT) || 8080;
 const PROJECT_ID = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT || 't8studio-infra-jp';
-const SECRET_NAME = process.env.CLAUDE_SECRET_NAME || 'claude-api-key';
-
-/** @type {string|null} */
-let cachedApiKey = null;
 
 /**
- * Secret Manager から Claude API キーを取得（プロセス内キャッシュ）
+ * ツールID → Secret Manager のシークレット名
+ * 環境変数 TOOL_SECRET_MAP があれば JSON で上書き可能
+ * 例: {"altplus":"claude-api-key-altplus","design-search":"claude-api-key-design-search"}
+ */
+const DEFAULT_TOOL_SECRET_MAP = {
+  altplus: 'claude-api-key-altplus',
+  'design-search': 'claude-api-key-design-search',
+};
+
+function loadToolSecretMap() {
+  if (process.env.TOOL_SECRET_MAP) {
+    try {
+      const parsed = JSON.parse(process.env.TOOL_SECRET_MAP);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (err) {
+      console.error('Invalid TOOL_SECRET_MAP JSON, using defaults');
+    }
+  }
+  return DEFAULT_TOOL_SECRET_MAP;
+}
+
+const TOOL_SECRET_MAP = loadToolSecretMap();
+
+/** @type {Map<string, string>} toolId → apiKey */
+const cachedApiKeys = new Map();
+
+/**
+ * ツールIDに対応する Claude API キーを Secret Manager から取得
  * キーの値はコード・ログに一切書かない
  */
-async function getApiKey() {
-  if (cachedApiKey) return cachedApiKey;
+async function getApiKeyForTool(toolId) {
+  if (cachedApiKeys.has(toolId)) {
+    return cachedApiKeys.get(toolId);
+  }
 
-  const name = `projects/${PROJECT_ID}/secrets/${SECRET_NAME}/versions/latest`;
+  const secretName = TOOL_SECRET_MAP[toolId];
+  if (!secretName) {
+    const err = new Error(`Unknown tool id: ${toolId}`);
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const name = `projects/${PROJECT_ID}/secrets/${secretName}/versions/latest`;
   const [version] = await secretClient.accessSecretVersion({ name });
   const key = version.payload.data.toString('utf8').trim();
 
   if (!key) {
-    throw new Error('Secret is empty');
+    throw new Error(`Secret is empty: ${secretName}`);
   }
 
-  cachedApiKey = key;
-  return cachedApiKey;
+  cachedApiKeys.set(toolId, key);
+  return key;
 }
 
 function setCors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Tool-Id');
   res.setHeader('Access-Control-Max-Age', '3600');
 }
 
@@ -64,9 +96,21 @@ function readJsonBody(req) {
   });
 }
 
+function resolveToolId(req, body) {
+  const headerId = req.headers['x-tool-id'];
+  if (typeof headerId === 'string' && headerId.trim()) {
+    return headerId.trim();
+  }
+  if (body && typeof body.tool_id === 'string' && body.tool_id.trim()) {
+    return body.tool_id.trim();
+  }
+  return null;
+}
+
 /**
- * ブラウザ → Cloud Run → Claude API の中継
- * リクエストボディは Anthropic Messages API と同じ形式をそのまま渡す
+ * ブラウザ/サーバー → Cloud Run → Claude API の中継
+ * 必須: X-Tool-Id ヘッダー（または body.tool_id）
+ * ボディは Anthropic Messages API と同じ形式
  */
 async function handleProxy(req, res) {
   setCors(res);
@@ -78,7 +122,10 @@ async function handleProxy(req, res) {
   }
 
   if (req.method === 'GET' && (req.url === '/' || req.url === '/health')) {
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, {
+      ok: true,
+      tools: Object.keys(TOOL_SECRET_MAP),
+    });
     return;
   }
 
@@ -100,13 +147,22 @@ async function handleProxy(req, res) {
     return;
   }
 
+  const toolId = resolveToolId(req, body);
+  if (!toolId) {
+    sendJson(res, 400, {
+      error: 'X-Tool-Id header (or body.tool_id) is required',
+      tools: Object.keys(TOOL_SECRET_MAP),
+    });
+    return;
+  }
+
   if (!body.messages || !Array.isArray(body.messages)) {
     sendJson(res, 400, { error: 'body.messages (array) is required' });
     return;
   }
 
   try {
-    const apiKey = await getApiKey();
+    const apiKey = await getApiKeyForTool(toolId);
 
     const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -127,8 +183,11 @@ async function handleProxy(req, res) {
     const data = await anthropicRes.json();
     sendJson(res, anthropicRes.status, data);
   } catch (err) {
+    const status = err && err.statusCode ? err.statusCode : 500;
     console.error('claudeProxy error:', err && err.message ? err.message : err);
-    sendJson(res, 500, { error: 'Proxy failed' });
+    sendJson(res, status, {
+      error: status === 400 ? err.message : 'Proxy failed',
+    });
   }
 }
 
@@ -143,4 +202,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`claude-api-proxy listening on port ${PORT}`);
+  console.log(`registered tools: ${Object.keys(TOOL_SECRET_MAP).join(', ')}`);
 });

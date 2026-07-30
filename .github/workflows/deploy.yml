@@ -73,7 +73,7 @@ jobs:
             --port=8080 \
             --memory=256Mi \
             --cpu=1 \
-            --timeout=60 \
+            --timeout=300 \
             --max-instances=5 \
             --service-account="$RUNTIME_SA" \
-            --set-env-vars="GCP_PROJECT=${PROJECT_ID},CLAUDE_SECRET_NAME=claude-api-key"
+            --set-env-vars="GCP_PROJECT=${PROJECT_ID}"
