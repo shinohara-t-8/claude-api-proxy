@@ -11,7 +11,18 @@ Anthropic Claude API の中継サービス（Cloud Run）。APIキーは GCP Sec
     → Claude API
 ```
 
-## 新しいツールを追加（自動化）
+## 管理ツール（ローカルUI）
+
+`start-admin.cmd` をダブルクリックするか:
+
+```powershell
+cd C:\Users\user\Documents\claude-api-proxy
+node admin\server.js
+```
+
+ブラウザで http://127.0.0.1:8787 を開き、Tool ID と APIキーを入力して登録します（localhost のみ待受）。
+
+## 新しいツールを追加（CLI）
 
 tool id と APIキーを渡すだけで、Secret 作成・権限付与・マップ更新まで行えます。
 

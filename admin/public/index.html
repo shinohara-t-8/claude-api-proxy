@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Key Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="bg"></div>
+  <main class="shell">
+    <header class="brand">
+      <p class="mark">T8 STUDIO</p>
+      <h1>Claude Key Admin</h1>
+      <p class="lead">ツールIDとAPIキーを入れるだけ。Secret Manager 登録からプロキシ反映までまとめて実行します。</p>
+    </header>
+
+    <form id="form" class="panel" autocomplete="off">
+      <label>
+        <span>Tool ID</span>
+        <input id="toolId" name="toolId" type="text" placeholder="例: auditor" pattern="[a-z0-9][a-z0-9-]{0,62}" required />
+      </label>
+
+      <label>
+        <span>Anthropic API Key</span>
+        <input id="apiKey" name="apiKey" type="password" placeholder="sk-ant-..." required />
+      </label>
+
+      <label class="check">
+        <input id="push" type="checkbox" checked />
+        <span>登録後に Git push して Cloud Run へ自動デプロイ</span>
+      </label>
+
+      <button type="submit" id="submitBtn">登録する</button>
+    </form>
+
+    <section class="side">
+      <div class="block">
+        <h2>登録済みツール</h2>
+        <ul id="toolList" class="tools"></ul>
+      </div>
+      <div class="block">
+        <h2>実行ログ</h2>
+        <pre id="log" class="log">待機中…</pre>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
