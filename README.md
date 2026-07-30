@@ -11,6 +11,19 @@ Anthropic Claude API の中継サービス（Cloud Run）。APIキーは GCP Sec
     → Claude API
 ```
 
+## 新しいツールを追加（自動化）
+
+tool id と APIキーを渡すだけで、Secret 作成・権限付与・マップ更新まで行えます。
+
+```powershell
+cd C:\Users\user\Documents\claude-api-proxy
+.\scripts\add-tool.ps1 -ToolId "auditor" -ApiKey "sk-ant-..." -Push
+```
+
+`-Push` を付けると commit & push まで行い、GitHub Actions が Cloud Run をデプロイします。
+
+Cursor では「〇〇ツールの APIキーを追加して」と伝えると、スキル `add-claude-tool` が同じ手順を実行します。
+
 ## ツール別シークレット
 
 | Tool ID (`X-Tool-Id`) | Secret Manager 名 |
