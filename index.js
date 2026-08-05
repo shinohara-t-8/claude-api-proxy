@@ -13,6 +13,7 @@ const PROJECT_ID = process.env.GCP_PROJECT || process.env.GCLOUD_PROJECT || 't8s
 const DEFAULT_TOOL_SECRET_MAP = {
   altplus: 'claude-api-key-altplus',
   'design-search': 'claude-api-key-design-search',
+  syomen: 'claude-api-key-syomen',
 };
 
 function loadToolSecretMap() {

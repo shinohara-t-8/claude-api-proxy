@@ -9,10 +9,17 @@ const PROJECT_ID = process.env.GCP_PROJECT || 't8studio-infra-jp';
 const RUNTIME_SA = process.env.RUNTIME_SA || '970630623430-compute@developer.gserviceaccount.com';
 
 function run(cmd, args, opts = {}) {
+  // Windows では gcloud.cmd のために shell が必要。
+  // git commit -m を shell 経由にするとメッセージが単語分割されるため git は shell なし。
+  const { shell: shellOpt, ...rest } = opts;
+  const shell =
+    shellOpt !== undefined
+      ? shellOpt
+      : process.platform === 'win32' && cmd !== 'git';
   const result = spawnSync(cmd, args, {
     encoding: 'utf8',
-    shell: process.platform === 'win32',
-    ...opts,
+    shell,
+    ...rest,
   });
   return {
     ok: result.status === 0,
@@ -72,7 +79,7 @@ function gitPush(toolId) {
 
   const commit = run(
     'git',
-    ['commit', '-m', `Register tool '${toolId}' in Claude proxy secret map.`],
+    ['commit', '-m', `Register tool ${toolId} in Claude proxy secret map.`],
     { cwd: ROOT }
   );
   logs.push(commit.stdout || commit.stderr);
