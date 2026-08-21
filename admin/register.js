@@ -46,6 +46,36 @@ const SECRET_PREFIX_KIND = [
   ['dropbox-token-', 'dropbox'],
 ];
 
+let gcloudBinCache = null;
+
+function resolveGcloudBin() {
+  if (process.env.GCLOUD_BIN) return process.env.GCLOUD_BIN;
+
+  const candidates = [
+    path.join(os.homedir(), 'google-cloud-sdk', 'bin', 'gcloud'),
+    '/usr/bin/gcloud',
+    '/usr/local/bin/gcloud',
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  const found = run('which', ['gcloud'], { shell: true });
+  if (found.ok && found.stdout) return found.stdout.split('\n')[0];
+
+  return null;
+}
+
+function getGcloudBin() {
+  if (!gcloudBinCache) gcloudBinCache = resolveGcloudBin();
+  if (!gcloudBinCache) {
+    throw new Error(
+      'gcloud が見つかりません。Google Cloud SDK をインストールするか、PATH に ~/google-cloud-sdk/bin を追加してください。'
+    );
+  }
+  return gcloudBinCache;
+}
+
 function run(cmd, args, opts = {}) {
   const { shell: shellOpt, ...rest } = opts;
   const shell =
@@ -62,11 +92,23 @@ function run(cmd, args, opts = {}) {
     status: result.status,
     stdout: (result.stdout || '').trim(),
     stderr: (result.stderr || '').trim(),
+    error: result.error ? result.error.message : '',
   };
 }
 
+function formatCommandError(label, result) {
+  const detail = [result.stderr, result.stdout, result.error].filter(Boolean).join('\n').trim();
+  if (!detail) {
+    return `${label}（詳細なし。gcloud auth login が必要かもしれません）`;
+  }
+  if (/Reauthentication failed|Please run:\s*\n\s*\$ gcloud auth login/i.test(detail)) {
+    return `${label}: GCP の認証が切れています。WSL で次を実行してください:\n  ~/google-cloud-sdk/bin/gcloud auth login\n  ~/google-cloud-sdk/bin/gcloud config set project ${PROJECT_ID}`;
+  }
+  return `${label}: ${detail}`;
+}
+
 function runGcloud(args) {
-  return run('gcloud', args);
+  return run(getGcloudBin(), args);
 }
 
 function assertToolId(toolId) {
@@ -184,7 +226,7 @@ function upsertSecret(secretName, secretValue, steps) {
         `--project=${PROJECT_ID}`,
       ]);
       if (!create.ok) {
-        throw new Error(`シークレット作成失敗: ${create.stderr || create.stdout}`);
+        throw new Error(formatCommandError('シークレット作成失敗', create));
       }
       steps.push({ step: 'secret_create', ok: true, detail: `created ${secretName}` });
     } else {
@@ -200,7 +242,7 @@ function upsertSecret(secretName, secretValue, steps) {
       `--project=${PROJECT_ID}`,
     ]);
     if (!addVersion.ok) {
-      throw new Error(`シークレット登録失敗: ${addVersion.stderr || addVersion.stdout}`);
+      throw new Error(formatCommandError('シークレット登録失敗', addVersion));
     }
     steps.push({ step: 'secret_version', ok: true, detail: 'バージョン登録完了' });
 
@@ -214,7 +256,7 @@ function upsertSecret(secretName, secretValue, steps) {
       '--quiet',
     ]);
     if (!iam.ok) {
-      throw new Error(`IAM 付与失敗: ${iam.stderr || iam.stdout}`);
+      throw new Error(formatCommandError('IAM 付与失敗', iam));
     }
     steps.push({ step: 'iam', ok: true, detail: 'secretAccessor 付与完了' });
   } finally {
