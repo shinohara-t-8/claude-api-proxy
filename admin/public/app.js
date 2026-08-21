@@ -7,6 +7,41 @@ const pushRow = document.getElementById('pushRow');
 const secretLabel = document.getElementById('secretLabel');
 const kindHint = document.getElementById('kindHint');
 const apiKeyEl = document.getElementById('apiKey');
+const singleKeyFields = document.getElementById('singleKeyFields');
+const dropboxFields = document.getElementById('dropboxFields');
+const accessTokenEl = document.getElementById('accessToken');
+const appKeyEl = document.getElementById('appKey');
+const appSecretEl = document.getElementById('appSecret');
+const refreshTokenEl = document.getElementById('refreshToken');
+
+const KIND_UI = {
+  claude: {
+    label: 'Anthropic API Key',
+    placeholder: 'sk-ant-...',
+    hint: 'Claude: Secret作成 → プロキシマップ更新 →（任意）自動デプロイ',
+    showPush: true,
+    multiField: false,
+  },
+  openai: {
+    label: 'OpenAI API Key',
+    placeholder: 'sk-...',
+    hint: 'ChatGPT: Secret Manager に保管のみ（中継プロキシは未接続）',
+    showPush: false,
+    multiField: false,
+  },
+  gemini: {
+    label: 'Gemini API Key',
+    placeholder: 'AIza...',
+    hint: 'Gemini: Secret Manager に保管のみ（中継プロキシは未接続）',
+    showPush: false,
+    multiField: false,
+  },
+  dropbox: {
+    hint: 'Dropbox: 4項目を JSON で Secret Manager に保管（中継プロキシは未接続）',
+    showPush: false,
+    multiField: true,
+  },
+};
 
 function setLog(text, type) {
   logEl.textContent = text;
@@ -14,19 +49,67 @@ function setLog(text, type) {
   if (type) logEl.classList.add(type);
 }
 
+function clearSecretFields() {
+  apiKeyEl.value = '';
+  accessTokenEl.value = '';
+  appKeyEl.value = '';
+  appSecretEl.value = '';
+  refreshTokenEl.value = '';
+}
+
 function syncKindUI() {
   const kind = kindEl.value;
-  if (kind === 'claude') {
-    secretLabel.textContent = 'Anthropic API Key';
-    apiKeyEl.placeholder = 'sk-ant-...';
-    pushRow.style.display = '';
-    kindHint.textContent = 'Claude: Secret作成 → プロキシマップ更新 →（任意）自動デプロイ';
+  const ui = KIND_UI[kind] || KIND_UI.claude;
+
+  if (ui.multiField) {
+    singleKeyFields.hidden = true;
+    dropboxFields.hidden = false;
+    apiKeyEl.required = false;
+    accessTokenEl.required = true;
+    appKeyEl.required = true;
+    appSecretEl.required = true;
+    refreshTokenEl.required = true;
   } else {
-    secretLabel.textContent = 'Dropbox Access Token';
-    apiKeyEl.placeholder = 'Dropbox token...';
-    pushRow.style.display = 'none';
-    kindHint.textContent = 'Dropbox: Secret Manager に保管のみ（中継プロキシは未接続）';
+    singleKeyFields.hidden = false;
+    dropboxFields.hidden = true;
+    apiKeyEl.required = true;
+    accessTokenEl.required = false;
+    appKeyEl.required = false;
+    appSecretEl.required = false;
+    refreshTokenEl.required = false;
+    secretLabel.textContent = ui.label;
+    apiKeyEl.placeholder = ui.placeholder;
   }
+
+  pushRow.style.display = ui.showPush ? '' : 'none';
+  kindHint.textContent = ui.hint;
+}
+
+function buildPayload() {
+  const kind = kindEl.value;
+  const toolId = document.getElementById('toolId').value.trim();
+  const push = kind === 'claude' && document.getElementById('push').checked;
+
+  if (kind === 'dropbox') {
+    return {
+      kind,
+      toolId,
+      push,
+      credentials: {
+        access_token: accessTokenEl.value.trim(),
+        app_key: appKeyEl.value.trim(),
+        app_secret: appSecretEl.value.trim(),
+        refresh_token: refreshTokenEl.value.trim(),
+      },
+    };
+  }
+
+  return {
+    kind,
+    toolId,
+    push,
+    apiKey: apiKeyEl.value.trim(),
+  };
 }
 
 async function refreshTools() {
@@ -50,19 +133,16 @@ syncKindUI();
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const kind = kindEl.value;
-  const toolId = document.getElementById('toolId').value.trim();
-  const apiKey = apiKeyEl.value.trim();
-  const push = kind === 'claude' && document.getElementById('push').checked;
 
   submitBtn.disabled = true;
   setLog('実行中…（キーはログに出しません）');
 
   try {
+    const payload = buildPayload();
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, toolId, apiKey, push }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok || data.ok === false) {
@@ -82,7 +162,7 @@ form.addEventListener('submit', async (e) => {
     lines.push(...data.steps.map((s) => `[${s.step}] ${s.detail}`));
 
     setLog(lines.join('\n'), 'ok');
-    apiKeyEl.value = '';
+    clearSecretFields();
     await refreshTools();
   } catch (err) {
     setLog(String(err.message || err), 'err');

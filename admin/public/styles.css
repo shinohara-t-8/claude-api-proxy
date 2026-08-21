@@ -78,6 +78,11 @@ html, body {
   gap: 1rem;
 }
 
+.field-group {
+  display: grid;
+  gap: 1rem;
+}
+
 label {
   display: grid;
   gap: 0.45rem;

@@ -76,6 +76,7 @@ const server = http.createServer(async (req, res) => {
         kind: body.kind,
         toolId: body.toolId,
         apiKey: body.apiKey,
+        credentials: body.credentials,
         push: Boolean(body.push),
       });
       sendJson(res, 200, result);

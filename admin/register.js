@@ -14,14 +14,37 @@ const KIND_CONFIG = {
     secretPrefix: 'claude-api-key-',
     needsProxyMap: true,
     proxyUrl: 'https://claude-proxy-3fwuq2jhrq-an.a.run.app',
+    storageOnly: false,
+  },
+  openai: {
+    label: 'ChatGPT',
+    secretPrefix: 'openai-api-key-',
+    needsProxyMap: false,
+    proxyUrl: null,
+    storageOnly: true,
+  },
+  gemini: {
+    label: 'Gemini',
+    secretPrefix: 'gemini-api-key-',
+    needsProxyMap: false,
+    proxyUrl: null,
+    storageOnly: true,
   },
   dropbox: {
     label: 'Dropbox',
     secretPrefix: 'dropbox-token-',
     needsProxyMap: false,
     proxyUrl: null,
+    storageOnly: true,
   },
 };
+
+const SECRET_PREFIX_KIND = [
+  ['claude-api-key-', 'claude'],
+  ['openai-api-key-', 'openai'],
+  ['gemini-api-key-', 'gemini'],
+  ['dropbox-token-', 'dropbox'],
+];
 
 function run(cmd, args, opts = {}) {
   const { shell: shellOpt, ...rest } = opts;
@@ -52,16 +75,49 @@ function assertToolId(toolId) {
   }
 }
 
-function assertSecretValue(kind, value) {
-  if (!value || !String(value).trim()) {
-    throw new Error('キー／トークンを入力してください');
+function assertSingleKey(kind, value) {
+  const key = String(value || '').trim();
+  if (!key) {
+    throw new Error('キーを入力してください');
   }
-  if (kind === 'claude' && !value.startsWith('sk-ant-')) {
+  if (kind === 'claude' && !key.startsWith('sk-ant-')) {
     throw new Error('Claude APIキーは sk-ant- で始まる必要があります');
   }
-  if (kind === 'dropbox' && value.trim().length < 10) {
-    throw new Error('Dropbox トークンが短すぎます');
+  if (kind === 'openai' && !/^sk-/.test(key)) {
+    throw new Error('OpenAI APIキーは sk- で始まる必要があります');
   }
+  if (kind === 'gemini' && key.length < 20) {
+    throw new Error('Gemini APIキーが短すぎます');
+  }
+  return key;
+}
+
+function assertDropboxCredentials(credentials) {
+  const access_token = String(credentials.access_token || '').trim();
+  const app_key = String(credentials.app_key || '').trim();
+  const app_secret = String(credentials.app_secret || '').trim();
+  const refresh_token = String(credentials.refresh_token || '').trim();
+
+  if (!access_token) throw new Error('Dropbox Access Token を入力してください');
+  if (!app_key) throw new Error('Dropbox App Key を入力してください');
+  if (!app_secret) throw new Error('Dropbox App Secret を入力してください');
+  if (!refresh_token) throw new Error('Dropbox Refresh Token を入力してください');
+
+  if (access_token.length < 10) throw new Error('Dropbox Access Token が短すぎます');
+  if (app_key.length < 5) throw new Error('Dropbox App Key が短すぎます');
+  if (app_secret.length < 5) throw new Error('Dropbox App Secret が短すぎます');
+  if (refresh_token.length < 10) throw new Error('Dropbox Refresh Token が短すぎます');
+
+  return { access_token, app_key, app_secret, refresh_token };
+}
+
+function buildSecretValue(kind, input) {
+  if (kind === 'dropbox') {
+    const cred = input.credentials || input;
+    const validated = assertDropboxCredentials(cred);
+    return JSON.stringify(validated, null, 2);
+  }
+  return assertSingleKey(kind, input.apiKey);
 }
 
 function updateToolMap(toolId, secretName) {
@@ -168,25 +224,33 @@ function upsertSecret(secretName, secretValue, steps) {
   }
 }
 
+function kindFromSecretName(secretName) {
+  for (const [prefix, kind] of SECRET_PREFIX_KIND) {
+    if (secretName.startsWith(prefix)) {
+      return { kind, toolId: secretName.slice(prefix.length) };
+    }
+  }
+  return null;
+}
+
 /**
- * @param {{ kind?: string, toolId: string, apiKey: string, push?: boolean }} input
+ * @param {{ kind?: string, toolId: string, apiKey?: string, credentials?: object, push?: boolean }} input
  */
 function registerTool(input) {
   const steps = [];
   const kind = String(input.kind || 'claude').trim().toLowerCase();
   const toolId = String(input.toolId || '').trim();
-  const apiKey = String(input.apiKey || '').trim();
   const wantPush = Boolean(input.push);
 
   if (!KIND_CONFIG[kind]) {
-    throw new Error('種別は claude または dropbox を指定してください');
+    throw new Error('種別は claude、openai、gemini、dropbox のいずれかを指定してください');
   }
 
   assertToolId(toolId);
-  assertSecretValue(kind, apiKey);
 
   const cfg = KIND_CONFIG[kind];
   const secretName = `${cfg.secretPrefix}${toolId}`;
+  const secretValue = buildSecretValue(kind, input);
 
   steps.push({
     step: 'validate',
@@ -194,7 +258,7 @@ function registerTool(input) {
     detail: `kind=${kind}, toolId=${toolId}, secret=${secretName}`,
   });
 
-  upsertSecret(secretName, apiKey, steps);
+  upsertSecret(secretName, secretValue, steps);
 
   let pushResult = { pushed: false, message: 'push 対象なし' };
 
@@ -212,13 +276,21 @@ function registerTool(input) {
     steps.push({
       step: 'map',
       ok: true,
-      detail: 'Dropbox は保管のみ（中継プロキシは未接続。Secret Manager に保存済み）',
+      detail: `${cfg.label} は Secret Manager に保管のみ（中継プロキシは未接続）`,
     });
     steps.push({
       step: 'push',
       ok: true,
-      detail: 'Dropbox 登録では Git push / Cloud Run デプロイは不要',
+      detail: `${cfg.label} 登録では Git push / Cloud Run デプロイは不要`,
     });
+  }
+
+  let note = null;
+  if (cfg.storageOnly) {
+    note = `Secret Manager への保管が完了しました（${cfg.label}）。中継プロキシは別途実装が必要です。`;
+    if (kind === 'dropbox') {
+      note += ' 認証情報は JSON（access_token / app_key / app_secret / refresh_token）で保存しました。';
+    }
   }
 
   return {
@@ -229,10 +301,7 @@ function registerTool(input) {
     secretName,
     proxyHeader: cfg.needsProxyMap ? `X-Tool-Id: ${toolId}` : null,
     proxyUrl: cfg.proxyUrl,
-    note:
-      kind === 'dropbox'
-        ? 'Secret Manager への保管が完了しました。Dropbox API 中継プロキシは別途実装が必要です。'
-        : null,
+    note,
     steps,
     push: pushResult,
   };
@@ -263,7 +332,7 @@ function listRegisteredTools() {
     }
   } catch (_) {}
 
-  // Secret Manager 上の実体も一覧（Dropbox含む）
+  // Secret Manager 上の実体も一覧
   const listed = runGcloud([
     'secrets',
     'list',
@@ -275,15 +344,14 @@ function listRegisteredTools() {
       const arr = JSON.parse(listed.stdout);
       for (const item of arr) {
         const secretName = secretNameFromResource(item.name || '');
-        if (secretName.startsWith('claude-api-key-')) {
-          const toolId = secretName.slice('claude-api-key-'.length);
-          if (!bySecret.has(secretName)) {
-            bySecret.set(secretName, { kind: 'claude', toolId, secretName });
-          }
-        } else if (secretName.startsWith('dropbox-token-')) {
-          const toolId = secretName.slice('dropbox-token-'.length);
-          bySecret.set(secretName, { kind: 'dropbox', toolId, secretName });
-        }
+        const parsed = kindFromSecretName(secretName);
+        if (!parsed) continue;
+        if (parsed.kind === 'claude' && bySecret.has(secretName)) continue;
+        bySecret.set(secretName, {
+          kind: parsed.kind,
+          toolId: parsed.toolId,
+          secretName,
+        });
       }
     } catch (_) {}
   }

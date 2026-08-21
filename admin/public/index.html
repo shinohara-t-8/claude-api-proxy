@@ -15,7 +15,7 @@
     <header class="brand">
       <p class="mark">T8 STUDIO</p>
       <h1>API Key Admin</h1>
-      <p class="lead">Tool ID とキーを入れるだけ。GCP Secret Manager に保管します。Claude はプロキシ反映まで、Dropbox は保管まで対応です。</p>
+      <p class="lead">Tool ID とキーを入れるだけ。GCP Secret Manager に保管します。Claude はプロキシ反映まで、ChatGPT / Gemini / Dropbox は保管まで対応です。</p>
     </header>
 
     <form id="form" class="panel" autocomplete="off">
@@ -23,19 +23,42 @@
         <span>種別</span>
         <select id="kind" name="kind" required>
           <option value="claude">Claude（Anthropic）</option>
+          <option value="openai">ChatGPT（OpenAI）</option>
+          <option value="gemini">Gemini（Google）</option>
           <option value="dropbox">Dropbox</option>
         </select>
       </label>
 
       <label>
         <span>Tool ID</span>
-        <input id="toolId" name="toolId" type="text" placeholder="例: auditor / genspark-aun" pattern="[a-z0-9][a-z0-9-]{0,62}" required />
+        <input id="toolId" name="toolId" type="text" placeholder="例: auditor / dropbox-download" pattern="[a-z0-9][a-z0-9-]{0,62}" required />
       </label>
 
-      <label>
-        <span id="secretLabel">API Key / Token</span>
-        <input id="apiKey" name="apiKey" type="password" placeholder="sk-ant-... または Dropbox token" required />
-      </label>
+      <div id="singleKeyFields">
+        <label>
+          <span id="secretLabel">API Key</span>
+          <input id="apiKey" name="apiKey" type="password" placeholder="sk-ant-..." />
+        </label>
+      </div>
+
+      <div id="dropboxFields" class="field-group" hidden>
+        <label>
+          <span>Access Token</span>
+          <input id="accessToken" name="accessToken" type="password" placeholder="sl.xxxx..." autocomplete="off" />
+        </label>
+        <label>
+          <span>App Key</span>
+          <input id="appKey" name="appKey" type="text" placeholder="Dropbox App Key" autocomplete="off" />
+        </label>
+        <label>
+          <span>App Secret</span>
+          <input id="appSecret" name="appSecret" type="password" placeholder="Dropbox App Secret" autocomplete="off" />
+        </label>
+        <label>
+          <span>Refresh Token</span>
+          <input id="refreshToken" name="refreshToken" type="password" placeholder="Dropbox Refresh Token" autocomplete="off" />
+        </label>
+      </div>
 
       <label class="check" id="pushRow">
         <input id="push" type="checkbox" checked />
