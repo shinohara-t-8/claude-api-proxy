@@ -73,6 +73,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const body = await readBody(req);
       const result = registerTool({
+        kind: body.kind,
         toolId: body.toolId,
         apiKey: body.apiKey,
         push: Boolean(body.push),
