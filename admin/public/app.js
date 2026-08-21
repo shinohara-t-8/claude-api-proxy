@@ -2,11 +2,31 @@ const form = document.getElementById('form');
 const logEl = document.getElementById('log');
 const toolList = document.getElementById('toolList');
 const submitBtn = document.getElementById('submitBtn');
+const kindEl = document.getElementById('kind');
+const pushRow = document.getElementById('pushRow');
+const secretLabel = document.getElementById('secretLabel');
+const kindHint = document.getElementById('kindHint');
+const apiKeyEl = document.getElementById('apiKey');
 
 function setLog(text, type) {
   logEl.textContent = text;
   logEl.classList.remove('ok', 'err');
   if (type) logEl.classList.add(type);
+}
+
+function syncKindUI() {
+  const kind = kindEl.value;
+  if (kind === 'claude') {
+    secretLabel.textContent = 'Anthropic API Key';
+    apiKeyEl.placeholder = 'sk-ant-...';
+    pushRow.style.display = '';
+    kindHint.textContent = 'Claude: Secret作成 → プロキシマップ更新 →（任意）自動デプロイ';
+  } else {
+    secretLabel.textContent = 'Dropbox Access Token';
+    apiKeyEl.placeholder = 'Dropbox token...';
+    pushRow.style.display = 'none';
+    kindHint.textContent = 'Dropbox: Secret Manager に保管のみ（中継プロキシは未接続）';
+  }
 }
 
 async function refreshTools() {
@@ -19,16 +39,21 @@ async function refreshTools() {
   }
   data.tools.forEach((t) => {
     const li = document.createElement('li');
-    li.innerHTML = `<code>${t.toolId}</code><span>${t.secretName}</span>`;
+    const kind = t.kind || 'claude';
+    li.innerHTML = `<code>${kind}:${t.toolId}</code><span>${t.secretName}</span>`;
     toolList.appendChild(li);
   });
 }
 
+kindEl.addEventListener('change', syncKindUI);
+syncKindUI();
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
+  const kind = kindEl.value;
   const toolId = document.getElementById('toolId').value.trim();
-  const apiKey = document.getElementById('apiKey').value.trim();
-  const push = document.getElementById('push').checked;
+  const apiKey = apiKeyEl.value.trim();
+  const push = kind === 'claude' && document.getElementById('push').checked;
 
   submitBtn.disabled = true;
   setLog('実行中…（キーはログに出しません）');
@@ -37,7 +62,7 @@ form.addEventListener('submit', async (e) => {
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toolId, apiKey, push }),
+      body: JSON.stringify({ kind, toolId, apiKey, push }),
     });
     const data = await res.json();
     if (!res.ok || data.ok === false) {
@@ -46,15 +71,18 @@ form.addEventListener('submit', async (e) => {
 
     const lines = [
       '成功',
+      `kind: ${data.kindLabel || data.kind}`,
       `toolId: ${data.toolId}`,
       `secret: ${data.secretName}`,
-      `header: ${data.proxyHeader}`,
-      `url: ${data.proxyUrl}`,
-      '',
-      ...data.steps.map((s) => `[${s.step}] ${s.detail}`),
     ];
+    if (data.proxyHeader) lines.push(`header: ${data.proxyHeader}`);
+    if (data.proxyUrl) lines.push(`url: ${data.proxyUrl}`);
+    if (data.note) lines.push(`note: ${data.note}`);
+    lines.push('');
+    lines.push(...data.steps.map((s) => `[${s.step}] ${s.detail}`));
+
     setLog(lines.join('\n'), 'ok');
-    document.getElementById('apiKey').value = '';
+    apiKeyEl.value = '';
     await refreshTools();
   } catch (err) {
     setLog(String(err.message || err), 'err');

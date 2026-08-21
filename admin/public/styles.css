@@ -89,7 +89,8 @@ label > span {
 }
 
 input[type="text"],
-input[type="password"] {
+input[type="password"],
+select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(0, 0, 0, 0.35);
@@ -100,9 +101,21 @@ input[type="password"] {
   outline: none;
 }
 
-input:focus {
+select {
+  cursor: pointer;
+}
+
+input:focus,
+select:focus {
   border-color: var(--lime);
   box-shadow: 0 0 0 3px rgba(202, 255, 25, 0.15);
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 .check {

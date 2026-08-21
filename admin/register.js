@@ -8,9 +8,22 @@ const INDEX_JS = path.join(ROOT, 'index.js');
 const PROJECT_ID = process.env.GCP_PROJECT || 't8studio-infra-jp';
 const RUNTIME_SA = process.env.RUNTIME_SA || '970630623430-compute@developer.gserviceaccount.com';
 
+const KIND_CONFIG = {
+  claude: {
+    label: 'Claude',
+    secretPrefix: 'claude-api-key-',
+    needsProxyMap: true,
+    proxyUrl: 'https://claude-proxy-3fwuq2jhrq-an.a.run.app',
+  },
+  dropbox: {
+    label: 'Dropbox',
+    secretPrefix: 'dropbox-token-',
+    needsProxyMap: false,
+    proxyUrl: null,
+  },
+};
+
 function run(cmd, args, opts = {}) {
-  // Windows では gcloud.cmd のために shell が必要。
-  // git commit -m を shell 経由にするとメッセージが単語分割されるため git は shell なし。
   const { shell: shellOpt, ...rest } = opts;
   const shell =
     shellOpt !== undefined
@@ -39,9 +52,15 @@ function assertToolId(toolId) {
   }
 }
 
-function assertApiKey(apiKey) {
-  if (!apiKey || !apiKey.startsWith('sk-ant-')) {
-    throw new Error('APIキーは sk-ant- で始まる必要があります');
+function assertSecretValue(kind, value) {
+  if (!value || !String(value).trim()) {
+    throw new Error('キー／トークンを入力してください');
+  }
+  if (kind === 'claude' && !value.startsWith('sk-ant-')) {
+    throw new Error('Claude APIキーは sk-ant- で始まる必要があります');
+  }
+  if (kind === 'dropbox' && value.trim().length < 10) {
+    throw new Error('Dropbox トークンが短すぎます');
   }
 }
 
@@ -63,7 +82,7 @@ function updateToolMap(toolId, secretName) {
 
   const updated = js.slice(0, m.index) + m[1] + body + m[3] + js.slice(m.index + m[0].length);
   fs.writeFileSync(INDEX_JS, updated, 'utf8');
-  return { changed: true, message: `マップに ${toolId} を追加しました` };
+  return { changed: true, message: `Claudeプロキシマップに ${toolId} を追加しました` };
 }
 
 function gitPush(toolId) {
@@ -92,26 +111,12 @@ function gitPush(toolId) {
   return { pushed: true, message: 'push 完了（GitHub Actions がデプロイします）', logs };
 }
 
-/**
- * @param {{ toolId: string, apiKey: string, push?: boolean }} input
- */
-function registerTool(input) {
-  const steps = [];
-  const toolId = String(input.toolId || '').trim();
-  const apiKey = String(input.apiKey || '').trim();
-  const wantPush = Boolean(input.push);
-
-  assertToolId(toolId);
-  assertApiKey(apiKey);
-
-  const secretName = `claude-api-key-${toolId}`;
+function upsertSecret(secretName, secretValue, steps) {
   const member = `serviceAccount:${RUNTIME_SA}`;
-  const keyFile = path.join(os.tmpdir(), `claude-key-${Date.now()}.txt`);
-
-  steps.push({ step: 'validate', ok: true, detail: `toolId=${toolId}, secret=${secretName}` });
+  const keyFile = path.join(os.tmpdir(), `secret-${Date.now()}.txt`);
 
   try {
-    fs.writeFileSync(keyFile, apiKey, { encoding: 'utf8', flag: 'w' });
+    fs.writeFileSync(keyFile, secretValue, { encoding: 'utf8', flag: 'w' });
 
     const describe = runGcloud(['secrets', 'describe', secretName, `--project=${PROJECT_ID}`]);
     if (!describe.ok) {
@@ -161,40 +166,132 @@ function registerTool(input) {
       if (fs.existsSync(keyFile)) fs.unlinkSync(keyFile);
     } catch (_) {}
   }
+}
 
-  const mapResult = updateToolMap(toolId, secretName);
-  steps.push({ step: 'map', ok: true, detail: mapResult.message });
+/**
+ * @param {{ kind?: string, toolId: string, apiKey: string, push?: boolean }} input
+ */
+function registerTool(input) {
+  const steps = [];
+  const kind = String(input.kind || 'claude').trim().toLowerCase();
+  const toolId = String(input.toolId || '').trim();
+  const apiKey = String(input.apiKey || '').trim();
+  const wantPush = Boolean(input.push);
 
-  let pushResult = { pushed: false, message: 'push はスキップ' };
-  if (wantPush) {
-    pushResult = gitPush(toolId);
-    steps.push({ step: 'push', ok: true, detail: pushResult.message });
+  if (!KIND_CONFIG[kind]) {
+    throw new Error('種別は claude または dropbox を指定してください');
+  }
+
+  assertToolId(toolId);
+  assertSecretValue(kind, apiKey);
+
+  const cfg = KIND_CONFIG[kind];
+  const secretName = `${cfg.secretPrefix}${toolId}`;
+
+  steps.push({
+    step: 'validate',
+    ok: true,
+    detail: `kind=${kind}, toolId=${toolId}, secret=${secretName}`,
+  });
+
+  upsertSecret(secretName, apiKey, steps);
+
+  let pushResult = { pushed: false, message: 'push 対象なし' };
+
+  if (cfg.needsProxyMap) {
+    const mapResult = updateToolMap(toolId, secretName);
+    steps.push({ step: 'map', ok: true, detail: mapResult.message });
+
+    if (wantPush) {
+      pushResult = gitPush(toolId);
+      steps.push({ step: 'push', ok: true, detail: pushResult.message });
+    } else {
+      steps.push({ step: 'push', ok: true, detail: 'push 未実行（チェックを外しています）' });
+    }
   } else {
-    steps.push({ step: 'push', ok: true, detail: 'push 未実行（チェックを外しています）' });
+    steps.push({
+      step: 'map',
+      ok: true,
+      detail: 'Dropbox は保管のみ（中継プロキシは未接続。Secret Manager に保存済み）',
+    });
+    steps.push({
+      step: 'push',
+      ok: true,
+      detail: 'Dropbox 登録では Git push / Cloud Run デプロイは不要',
+    });
   }
 
   return {
     ok: true,
+    kind,
+    kindLabel: cfg.label,
     toolId,
     secretName,
-    proxyHeader: `X-Tool-Id: ${toolId}`,
-    proxyUrl: 'https://claude-proxy-3fwuq2jhrq-an.a.run.app',
+    proxyHeader: cfg.needsProxyMap ? `X-Tool-Id: ${toolId}` : null,
+    proxyUrl: cfg.proxyUrl,
+    note:
+      kind === 'dropbox'
+        ? 'Secret Manager への保管が完了しました。Dropbox API 中継プロキシは別途実装が必要です。'
+        : null,
     steps,
     push: pushResult,
   };
 }
 
-function listRegisteredTools() {
-  const js = fs.readFileSync(INDEX_JS, 'utf8');
-  const m = js.match(/const DEFAULT_TOOL_SECRET_MAP = \{([\s\S]*?)\n\};/);
-  if (!m) return [];
-  const tools = [];
-  const re = /^\s*'?([a-z0-9][a-z0-9-]*)'?\s*:\s*'([^']+)'/gm;
-  let match;
-  while ((match = re.exec(m[1])) !== null) {
-    tools.push({ toolId: match[1], secretName: match[2] });
-  }
-  return tools;
+function secretNameFromResource(name) {
+  const parts = String(name).split('/');
+  return parts[parts.length - 1] || String(name);
 }
 
-module.exports = { registerTool, listRegisteredTools, ROOT };
+function listRegisteredTools() {
+  const bySecret = new Map();
+
+  // Claude: プロキシマップ
+  try {
+    const js = fs.readFileSync(INDEX_JS, 'utf8');
+    const m = js.match(/const DEFAULT_TOOL_SECRET_MAP = \{([\s\S]*?)\n\};/);
+    if (m) {
+      const re = /^\s*'?([a-z0-9][a-z0-9-]*)'?\s*:\s*'([^']+)'/gm;
+      let match;
+      while ((match = re.exec(m[1])) !== null) {
+        bySecret.set(match[2], {
+          kind: 'claude',
+          toolId: match[1],
+          secretName: match[2],
+        });
+      }
+    }
+  } catch (_) {}
+
+  // Secret Manager 上の実体も一覧（Dropbox含む）
+  const listed = runGcloud([
+    'secrets',
+    'list',
+    `--project=${PROJECT_ID}`,
+    '--format=json',
+  ]);
+  if (listed.ok && listed.stdout) {
+    try {
+      const arr = JSON.parse(listed.stdout);
+      for (const item of arr) {
+        const secretName = secretNameFromResource(item.name || '');
+        if (secretName.startsWith('claude-api-key-')) {
+          const toolId = secretName.slice('claude-api-key-'.length);
+          if (!bySecret.has(secretName)) {
+            bySecret.set(secretName, { kind: 'claude', toolId, secretName });
+          }
+        } else if (secretName.startsWith('dropbox-token-')) {
+          const toolId = secretName.slice('dropbox-token-'.length);
+          bySecret.set(secretName, { kind: 'dropbox', toolId, secretName });
+        }
+      }
+    } catch (_) {}
+  }
+
+  return Array.from(bySecret.values()).sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    return a.toolId.localeCompare(b.toolId);
+  });
+}
+
+module.exports = { registerTool, listRegisteredTools, ROOT, KIND_CONFIG };
